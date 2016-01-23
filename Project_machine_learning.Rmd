@@ -1,0 +1,104 @@
+---
+title: "Predicting how well a dumbbell exercice is performed using machine learning"
+output: html_document
+---
+
+#Summary  
+
+Based on the data gathered from accelerometers on the belt, forearm, arm, and dumbell during an expererience involving 6 helathy participants performing the Unilateral Dumbbell Biceps Curl exercice in 5 differentes fashions, a Generalized Boosted Machine (gbm) model has been trained to predict how well the exercice was performed. The model was choosen with cross validation and an out-of-sample error of was estimated, revealing a high performing predictive model.
+
+#Data exploraton and pre-processing
+
+Once the data is loaded, we can see that there are many columns with an overwhelming number of NAs. 
+
+Here we calculate the share of NAs for each columns, and we get a table that looks like this (we exclude the first 7 columns that are just names, timestamps and measuring window times):
+
+```{r, echo=FALSE, cache=TRUE}
+main <- read.csv("~/datasciencecoursera/project_machine_learning/pml-training.csv")
+NaRate <- NULL
+for (i in 1:dim(main)[2]) {
+    if (class(main[,i]) == "factor") {NaRate <- rbind(NaRate,data.frame(colName = names(main)[i], class = class(main[,i]),NA_rate = sum(main[,i]=="")/length(main[,i])))}
+    else {NaRate <- rbind(NaRate,data.frame(colName = names(main)[i], class = class(main[,i]),NA_rate= sum(is.na(main[,i]))/length(main[,i])))}
+}
+NaRate[c(9:14,160),]
+```
+
+It seems that either the column has no NA or has a very big amount of them (the "classe"" column in the end has no NAs, which is great because we will train our model on this attribute !):
+
+```{r, echo=FALSE, cache=TRUE}
+##Here I exclude the classe column just for the sake of getting a view of how many features I will use in my model
+x <- as.data.frame(aggregate(colName~NA_rate, data = NaRate[-c(1:7,160),], FUN = length))
+names(x) <- c("NA_rate","Col_count")
+x
+```
+
+In fact there are `r x[1,2]` columns without NAs, and `r x[2,2]` columns with `r round(x[2,1]*100,2)`% of NAs (here we did not consider the "classe" column as it will be the one we will train the model on).
+
+Let's exclude those `r x[2,2]` columns and train our model on the `r x[1,2]`  others.
+
+```{r, echo=FALSE, cache=TRUE}
+main2 <- main[,NaRate[NaRate$NA_r==0,1][-c(1:7)]]
+```
+
+#Cross-validation and selected model characterisation
+
+Using the caret and gbm packages, we train Generalized Boosted Machine (gbm) models on the pre-processed dataset. The "trControl" options is set with 10-fold cross validation, and the savePredictions option is set as TRUE, as we need those predictions for the ex-post out-of-sample error estimation.
+
+The model has the following attributes:
+
+```{r, echo=FALSE, cache=TRUE,message=FALSE}
+library(caret)
+library(gbm)
+```
+```{r, echo=FALSE, cache=TRUE,message=FALSE}
+fitControl <- trainControl(## 10-fold CV
+    method = "cv",number = 10,
+   savePredictions=TRUE)
+
+set.seed(1000)
+
+mod <- train(classe~.,method="gbm", data = main2, 
+             trControl = fitControl, 
+             verbose = FALSE)
+```
+```{r, echo=FALSE, cache=TRUE,message=FALSE}
+mod
+```
+
+So the final model choosen based on `r mod$metric` has `r mod$bestTune[[1]]` trees, and interaction depth of `r mod$bestTune[[2]]`, a shrinkage value set as `r mod$bestTune[[3]]` and finally a minimum observation in each node set as `r mod$bestTune[[4]]` observations.
+
+Here we look at the top 20 most important variables in the model:
+```{r, echo=FALSE, cache=TRUE}
+plot(varImp(mod), top = 20, 
+     main="GBM variable importance (top 20 out of 52)")
+```
+
+We then estimate the out-of-sample error based on the saved predictions from the 10-fold cross-validation.
+
+#Out-of-sample error estimation
+
+For each of the 10 folds of the cross-validation, we look at the number of misclassified observation of the hold-out dataset for the specific model that has been eventually selected and that we described above :
+
+```{r, echo=FALSE, cache=TRUE}
+oos_pred <- mod$pred[mod$pred$n.trees == 150
+                     & mod$pred$interaction.depth == 3
+                     & mod$pred$shrinkage == 0.1
+                     & mod$pred$n.minobsinnode == 10,]
+
+oos1 <- as.data.frame(aggregate((obs != pred)~Resample, data = oos_pred, FUN = sum))
+oos2 <- merge(oos1,as.data.frame(aggregate(obs~Resample, data= oos_pred, FUN = length)))
+names(oos2) <- c("Folds","Misclass","Total")
+oos2
+```
+
+Now to compute and estimation of the out-of-sample error, we just average the error rate across those 10 folds.
+
+```{r, echo=FALSE, cache=TRUE}
+oos <- sum(oos2$Misclass/oos2$Total)/nrow(oos2)
+```
+
+The out-of-sample error is estimated as around `r round(oos*100,2)`%, which is quite low, revealing a relatively good model performance for this type of setup.
+
+#Conclusion
+
+The model trained on the dataset seems to be particularly good at predicting the way the Unilateral Dumbbell Biceps Curl exercice is performed, but we have to underline that this is based on a relatively small dataset out of only 6 participants who were all young and healthy men. These results are only valid for new data generated from them. To be generalized (or not), this model should be trained on more data from more participants of different age, size and health conditions.
